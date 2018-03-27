@@ -12,11 +12,20 @@
 #include <pthread.h>
 #include <map>
 
+//to compile:  export PATH=/opt/cuda-8.0/bin:$PATH
+//             nvcc -std=c++11 -g -o kmeans kmeans.cu
+
 #define no_argument 0
 #define required_argument 1
 #define optional_argument 2
 
 using namespace std;
+
+struct params {
+	int num_clusters;
+	double threshold;
+	int max_iters;
+};
 
 /* Arguments */
 int NUM_CLUSTERS = 2;
@@ -47,6 +56,12 @@ typedef struct Point {
 
 /* Input data */
 vector<Point> data;
+
+/* Cuda Variables */
+double* d_data;
+double* d_centroids;
+params d_params;
+
 
 /* Models a centroid */
 typedef struct Centroid {
@@ -147,6 +162,7 @@ void args(int argc, char* argv[]) {
 				break;
 		}
 	}
+
 }
 
 /* Reads in input from file denoted by PATH */
@@ -169,24 +185,38 @@ void input() {
 				data[id - 1].vals.push_back(c);
 			}
 		}
+
+		int size = sizeof(double) * data.size() * data[0].size();
+		
+		cudaMalloc((void**)&d_data, size);
+
+		for(int i = 0; i < data.size(); i++) {
+			cudaMemcpy(d_data + i * data[0].size(), &data[i], sizeof(double) * data[0].size(), cudaMemcpyHostToDevice);
+		}
 	}
 }
 
 /* Reports output */
-void output(auto dur) {
-	// cout << "Converged in " << iterations << " iterations (max=" << MAX_ITERS << ")\n";
-	typedef std::chrono::duration<float> float_seconds;
-	auto secs = std::chrono::duration_cast<float_seconds>(dur);
-	cout << secs.count() << endl;
-	// for(Centroid& c : centroids) {
-	// 	c.out();
-	// }
-}
+// void output(auto dur) {
+// 	// cout << "Converged in " << iterations << " iterations (max=" << MAX_ITERS << ")\n";
+// 	typedef std::chrono::duration<float> float_seconds;
+// 	auto secs = std::chrono::duration_cast<float_seconds>(dur);
+// 	cout << secs.count() << endl;
+// 	// for(Centroid& c : centroids) {
+// 	// 	c.out();
+// 	// }
+// }
 
 /* Creates centroids initially set at random points */
 void randomCentroids(int num_features) {
 	for(int i = 0; i < NUM_CLUSTERS; i++) {
 		centroids.emplace_back(num_features, i, rand() % data.size());
+	}
+
+	int size = NUM_CLUSTERS * num_features * sizeof(double);
+	cudaMalloc((void**) &d_centroids, size);
+	for(int i = 0; i < NUM_CLUSTERS; i++) {
+		cudaMemcpy(d_centroids + i * num_features, &centroids[i], sizeof(double) * num_features, cudaMemcpyHostToDevice);
 	}
 }
 
@@ -299,5 +329,8 @@ int main(int argc, char* argv[]) {
 	auto dur = end - before;
 
 	/* Output */
-	output(dur);
+	// output(dur);
+
+	// CALL THIS 
+	// cudaDeviceSyncronize();
 }

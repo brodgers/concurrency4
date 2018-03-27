@@ -1,6 +1,6 @@
 #!/bin/bash
 
-g++ -Wall -std=c++14 -o kmeans kmeans.cpp -l pthread
+# g++ -Wall -std=c++14 -o kmeans kmeans.cpp -l pthread
 # for number in {1..16}
 # do
 # 	echo $number
@@ -8,3 +8,5 @@ g++ -Wall -std=c++14 -o kmeans kmeans.cpp -l pthread
 # 	# echo $output >> part2_spin.out
 # done
 # ./kmeans --input "in" --threshold 0.0000001 --iterations 20 --clusters 2 --workers 4
+
+nvcc -std=c++11 -g -o kmeans kmeans.cu
