@@ -61,7 +61,7 @@ vector<Point> data;
 /* Cuda Variables */
 double* d_data;
 double* d_centroids;
-params d_params;
+params* d_params;
 
 
 /* Models a centroid */
@@ -195,7 +195,14 @@ void input() {
 			cudaMemcpy(d_data + i * data[0].size(), &data[i], sizeof(double) * data[0].size(), cudaMemcpyHostToDevice);
 		}
 
-		params.num_clusters = 
+		params p;
+		p.num_clusters = NUM_CLUSTERS;
+		p.threshold = THRESHOLD;
+		p.max_iters = MAX_ITERS;
+		p.num_features = data[0].size();
+
+		cudaMalloc((void**)&d_params, sizeof(params));
+		cudaMemcpy(d_params, &p, sizeof(params), cudaMemcpyHostToDevice);
 	}
 }
 
@@ -251,30 +258,18 @@ float euclideanDistance(T1& a, T2& b) {
 }
 
 /* Finds the nearest centroid to a point */
-int nearest(Point& p) {
-	float distance = FLT_MAX;
-	int index;
-	for(unsigned int i = 0; i < centroids.size(); i++) {
-		float d = euclideanDistance(centroids[i], p);
-		if(d < distance) {
-			distance = d;
-			index = i;
-		}
-	}
-	return index;
-}
-
-/* Finds the nearest centroids for all points and populates clusters */
-void findNearestCentroids(int s, int e, vector<vector<int>>& local_clusters) {
+int nearest(double* d_centroids) {
+	// float distance = FLT_MAX;
+	// int index;
+	// for(unsigned int i = 0; i < centroids.size(); i++) {
+	// 	float d = euclideanDistance(centroids[i], p);
+	// 	if(d < distance) {
+	// 		distance = d;
+	// 		index = i;
+	// 	}
+	// }
+	// return index;
 	
-	for(int i = s; i < e; i++) {
-		Point& p = data[i];
-		p.label = nearest(p);
-
-		local_clusters[p.label].push_back(i);
-	}
-	
-
 }
 
 void aggregate_clusters(vector<vector<int>>& local_clusters) {
@@ -284,26 +279,29 @@ void aggregate_clusters(vector<vector<int>>& local_clusters) {
 	}
 }
 
-__global__ findNearestCentroid(double *d_centroids, double *d_data) {
-	//do something
+/* Finds the nearest centroids for all points and populates clusters */
+__global__ findNearestCentroid(double* d_centroids, double* d_data, params* p_params) {
+	for(int i = 0; i < params->num_features; i++) {
+		
+	}
 }
 
 /* Runs kmeans on dataset */
-__global__ void* kmeans(void *_id, double* d_centroids, double *d_data) {
-	int id = (long) _id;
-	int start = data.size() / NUM_WORKERS * id;
-	int end = data.size() / NUM_WORKERS * (id + 1);
-	if(id == NUM_WORKERS - 1)
-		end = data.size();
+__global__ void* kmeans(double* d_centroids, double* d_data, params* p_params) {
+	// int id = (long) _id;
+	// int start = data.size() / NUM_WORKERS * id;
+	// int end = data.size() / NUM_WORKERS * (id + 1);
+	// if(id == NUM_WORKERS - 1)
+	// 	end = data.size();
 
-	vector<vector<int>> local_clusters(NUM_CLUSTERS);
+	// vector<vector<int>> local_clusters(NUM_CLUSTERS);
 
 	int iterations = 0;
 	bool done = false;
 
 	while(!done) {
-		findNearestCentroids(start, end, local_clusters);
-		aggregate_clusters(local_clusters);
+		findNearestCentroids(d_centroids, d_data, p_params);
+		// aggregate_clusters(local_clusters);
 
 		double max_diff = recalculateCentroids(id);
 
