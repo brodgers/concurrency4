@@ -25,6 +25,7 @@ struct params {
 	int num_clusters;
 	double threshold;
 	int max_iters;
+	int num_features;
 };
 
 /* Arguments */
@@ -193,6 +194,8 @@ void input() {
 		for(int i = 0; i < data.size(); i++) {
 			cudaMemcpy(d_data + i * data[0].size(), &data[i], sizeof(double) * data[0].size(), cudaMemcpyHostToDevice);
 		}
+
+		params.num_clusters = 
 	}
 }
 
@@ -213,7 +216,7 @@ void randomCentroids(int num_features) {
 		centroids.emplace_back(num_features, i, rand() % data.size());
 	}
 
-	int size = NUM_CLUSTERS * num_features * sizeof(double);
+	int size = NUM_CLUSTERS * num_features * sizeof(double);	
 	cudaMalloc((void**) &d_centroids, size);
 	for(int i = 0; i < NUM_CLUSTERS; i++) {
 		cudaMemcpy(d_centroids + i * num_features, &centroids[i], sizeof(double) * num_features, cudaMemcpyHostToDevice);
@@ -281,8 +284,12 @@ void aggregate_clusters(vector<vector<int>>& local_clusters) {
 	}
 }
 
+__global__ findNearestCentroid(double *d_centroids, double *d_data) {
+	//do something
+}
+
 /* Runs kmeans on dataset */
-void* kmeans(void *_id) {
+__global__ void* kmeans(void *_id, double* d_centroids, double *d_data) {
 	int id = (long) _id;
 	int start = data.size() / NUM_WORKERS * id;
 	int end = data.size() / NUM_WORKERS * (id + 1);
