@@ -26,6 +26,7 @@ struct params {
 	double threshold;
 	int max_iters;
 	int num_features;
+	int num_points;
 };
 
 /* Arguments */
@@ -35,13 +36,9 @@ int MAX_ITERS = 0;
 int NUM_WORKERS = 1;
 string PATH = "kmeans-sample-inputs/color100";
 
-/* Global clusters array */
-vector<vector<int>> clusters;
-
-
 /* Models a data point */
 typedef struct Point {
-	vector<float> vals;
+	vector<double> vals;
 	int label;
 
 	Point() : vals(), label(0) {}
@@ -50,7 +47,7 @@ typedef struct Point {
 		return vals.size();
 	}
 
-	float& operator [] (int i) {
+	double& operator [] (int i) {
 		return vals[i];
 	}
 } Point;
@@ -58,20 +55,14 @@ typedef struct Point {
 /* Input data */
 vector<Point> data;
 
-/* Cuda Variables */
-double* d_data;
-double* d_centroids;
-params* d_params;
-
-
 /* Models a centroid */
 typedef struct Centroid {
-	vector<float> c;
+	vector<double> c;
 	int label;
 
 	Centroid(int dims, int l) : c(dims), label(l) {
 		for(int i = 0; i < dims; i++) {
-			float r = rand() / static_cast <float> (RAND_MAX);
+			double r = rand() / static_cast <double> (RAND_MAX);
 			c[i] = r;
 		}
 	}
@@ -83,36 +74,17 @@ typedef struct Centroid {
 		}
 	}
 
-	double recalculate() {
-		vector<float> sums(c.size(), 0.0f);
-		for(int i : clusters[label]) {
-			Point& p = data[i];
-			for(unsigned int i = 0; i < c.size(); i++) {
-				sums[i] += p.vals[i];
-			}
-		}
-
-		double distance = 0.0f;
-		for(unsigned int i = 0; i < c.size(); i++) {
-			double n = sums[i] / clusters[label].size();
-			distance += (n - c[i]) * (n - c[i]);
-			c[i] = n;
-		}
-		clusters[label].clear();
-		return sqrt(distance);
-	}
-
 	int size() {
 		return c.size();
 	}
 
-	float& operator [] (int i) {
+	double& operator [] (int i) {
 		return c[i];
 	}
 
 	void out() {
 		cout << "Cluster " << label << " center: ";
-		for(float f : c) {
+		for(double f : c) {
 			cout << "[" << f << "]";
 		}
 		cout << endl;
@@ -121,6 +93,14 @@ typedef struct Centroid {
 
 /* Cluster centers */
 vector<Centroid> centroids;
+
+/* Cuda Variables */
+double* d_data;
+double* d_centroids;
+params* d_params;
+int* d_labels;
+
+params p;
 
 /* Handles command line arguments */
 void args(int argc, char* argv[]) {
@@ -174,10 +154,8 @@ void input() {
 		getline(file, line);
 		int num_points = stoi(line);
 
-		clusters = vector<vector<int>>(NUM_CLUSTERS);	
-
 		data = vector<Point>(num_points);
-		float c;
+		double c;
 		int id;
 		while(getline(file, line)) {
 			istringstream ss(line);
@@ -192,17 +170,20 @@ void input() {
 		cudaMalloc((void**)&d_data, size);
 
 		for(int i = 0; i < data.size(); i++) {
-			cudaMemcpy(d_data + i * data[0].size(), &data[i], sizeof(double) * data[0].size(), cudaMemcpyHostToDevice);
+			for(int j = 0; j < data[0].size(); j++)
+				cudaMemcpy(d_data + i * data[0].size() + j, &data[i].vals[j], sizeof(double), cudaMemcpyHostToDevice);
 		}
 
-		params p;
 		p.num_clusters = NUM_CLUSTERS;
 		p.threshold = THRESHOLD;
 		p.max_iters = MAX_ITERS;
 		p.num_features = data[0].size();
+		p.num_points = data.size();
 
 		cudaMalloc((void**)&d_params, sizeof(params));
 		cudaMemcpy(d_params, &p, sizeof(params), cudaMemcpyHostToDevice);
+
+		cudaMalloc((void**)&d_labels, sizeof(int) * data.size());
 	}
 }
 
@@ -222,120 +203,136 @@ void randomCentroids(int num_features) {
 	for(int i = 0; i < NUM_CLUSTERS; i++) {
 		centroids.emplace_back(num_features, i, rand() % data.size());
 	}
+	// for (Centroid c : centroids) {
+	// 	c.out();
+	// }
 
 	int size = NUM_CLUSTERS * num_features * sizeof(double);	
 	cudaMalloc((void**) &d_centroids, size);
 	for(int i = 0; i < NUM_CLUSTERS; i++) {
-		cudaMemcpy(d_centroids + i * num_features, &centroids[i], sizeof(double) * num_features, cudaMemcpyHostToDevice);
-	}
-}
-
-/* Recalculates centroid centers and returns the max difference between old and new centers */
-double recalculateCentroids(unsigned int id) {
-	double max = 0.0f;
-	for(unsigned int i = 0; i < centroids.size(); i++) {
-		if(i % NUM_WORKERS == id) {
-			Centroid& c = centroids[i];
-			double diff = c.recalculate();
-			if(diff > max) {
-				max = diff;
-			}
+		for(int j = 0; j < num_features; j++) {
+			cudaMemcpy(d_centroids + i * num_features + j, &centroids[i].c[j], sizeof(double), cudaMemcpyHostToDevice);
 		}
 	}
-
-	return max;
 }
 
 /* Calculate euclidean distance between two points */
-template <typename T1, typename T2>
-float euclideanDistance(T1& a, T2& b) {
-	assert(a.size() == b.size());
-	float d = 0.0f;
-	for(int i = 0; i < a.size(); i++) {
+__device__ double euclideanDistance(double* a, double* b, int num_features) {
+	double d = 0.0;
+	for(int i = 0; i < num_features; i++) {
 		d += (a[i] - b[i]) * (a[i] - b[i]);
 	}
 	return sqrt(d);
 }
 
+__device__ double recalculate(int label, int* labels, double* d_data, double* centroid, params* p, double* sums) {
+	double distance = 0.0;
+	for(int i = 0; i < p->num_features; i++) {
+		sums[i] = 0.0;
+	}
+	int count = 0;
+	for(int i = 0; i < p->num_points; i++) {
+		if(label == labels[i]) {
+			for(int j = 0; j < p->num_features; j++) {
+				sums[i] += d_data[i * p->num_features + j];
+				count++;
+			}
+		}
+	}
+	if(count > 0) {
+		for(int i = 0; i < p->num_features; i++) {
+			sums[i] /= count;
+		}
+		distance = euclideanDistance(centroid, sums, p->num_features);
+		for(int i = 0; i < p->num_features; i++) {
+			centroid[i] = sums[i];
+		}
+	}
+	return distance;
+}
+
+/* Recalculates centroid centers and returns the max difference between old and new centers */
+__global__ void recalculateCentroids(double* d_centroids, double* d_data, int* labels, params* p, double* sums, double* max_diff) {
+	double max = 0.0;
+	for(unsigned int i = 0; i < p->num_clusters; i++) {
+		double diff = recalculate(i, labels, d_data, &d_centroids[i * p->num_features], p, sums);
+		if(diff > max) {
+			max = diff;
+		}
+	}
+	*max_diff = max;
+}
+
 /* Finds the nearest centroid to a point */
-int nearest(double* d_centroids) {
-	// float distance = FLT_MAX;
-	// int index;
-	// for(unsigned int i = 0; i < centroids.size(); i++) {
-	// 	float d = euclideanDistance(centroids[i], p);
-	// 	if(d < distance) {
-	// 		distance = d;
-	// 		index = i;
-	// 	}
-	// }
-	// return index;
+__device__ int nearest(double* d_centroids, double* point, params *p) {
+	float distance = FLT_MAX;
+	int index;
+	for(unsigned int i = 0; i < p->num_clusters; i++) {
+		float d = euclideanDistance(&d_centroids[p->num_features * i], point, p->num_features);
+		if(d < distance) {
+			distance = d;
+			index = i;
+		}
+	}
+	return index;
 	
 }
 
-void aggregate_clusters(vector<vector<int>>& local_clusters) {
-	for(int i = 0; i < NUM_CLUSTERS; i++) {
-		clusters[i].insert(clusters[i].end(), local_clusters[i].begin(), local_clusters[i].end());
-		local_clusters[i].clear();
-	}
-}
+// void aggregate_clusters(vector<vector<int>>& local_clusters) {
+// 	for(int i = 0; i < NUM_CLUSTERS; i++) {
+// 		clusters[i].insert(clusters[i].end(), local_clusters[i].begin(), local_clusters[i].end());
+// 		local_clusters[i].clear();
+// 	}
+// }
 
 /* Finds the nearest centroids for all points and populates clusters */
-__global__ findNearestCentroid(double* d_centroids, double* d_data, params* p_params) {
-	for(int i = 0; i < params->num_features; i++) {
-		
+__global__ void findNearestCentroids(double* d_centroids, double* d_data, int* d_labels, params* d_params) {
+	int index = blockIdx.x * blockDim.x + threadIdx.x * d_params->num_features;
+	if(index < d_params->num_points) {
+		d_labels[blockIdx.x * blockDim.x + threadIdx.x] = nearest(d_centroids, &d_data[blockIdx.x * blockDim.x + threadIdx.x * d_params->num_features], d_params);
 	}
 }
 
 /* Runs kmeans on dataset */
-__global__ void* kmeans(double* d_centroids, double* d_data, params* p_params) {
-	// int id = (long) _id;
-	// int start = data.size() / NUM_WORKERS * id;
-	// int end = data.size() / NUM_WORKERS * (id + 1);
-	// if(id == NUM_WORKERS - 1)
-	// 	end = data.size();
-
-	// vector<vector<int>> local_clusters(NUM_CLUSTERS);
-
+__global__ void kmeans(double* d_centroids, double* d_data, int* d_labels, params* d_params, double* sums, double* diff) {
 	int iterations = 0;
 	bool done = false;
 
 	while(!done) {
-		findNearestCentroids(d_centroids, d_data, p_params);
+		findNearestCentroids<<<20, 1024>>>(d_centroids, d_data, d_labels, d_params);
 		// aggregate_clusters(local_clusters);
+		cudaDeviceSynchronize();
 
-		double max_diff = recalculateCentroids(id);
+		recalculateCentroids<<<1, 1>>>(d_centroids, d_data, d_labels, d_params, sums, diff);
+		cudaDeviceSynchronize();
 
-		done = ++iterations >= MAX_ITERS || max_diff <= THRESHOLD;
+		done = ++iterations >= d_params->max_iters || *diff <= d_params->threshold;
 	}
-
-	return nullptr;
 }
 
 int main(int argc, char* argv[]) {
 	args(argc, argv);
 	input();
 
-	/* Time start */
-	auto before = chrono::system_clock::now();
+	double* sums;
+	cudaMalloc((void**)&sums, sizeof(double) * p.num_features);
+	double* diff;
+	cudaMalloc((void**)&diff, sizeof(double));
 
 	randomCentroids(data[0].size());
 
-	vector<pthread_t> threads(NUM_WORKERS);
-	for(long i = 0; i < NUM_WORKERS; i++) {
-		pthread_create(&threads[i], NULL, kmeans, (void*)i);
-	}
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
 
-	for(int i = 0; i < NUM_WORKERS; i++) {
-		pthread_join(threads[i], NULL);
-	}
+	cudaEventRecord(start);
+	kmeans<<<1, 1>>>(d_centroids, d_data, d_labels, d_params, sums, diff);
+	// cudaDeviceSynchronize();
+	cudaEventRecord(stop);
 
-	/* Time finish */
-	auto end = chrono::system_clock::now();
-	auto dur = end - before;
+	cudaEventSynchronize(stop);
+	float milliseconds = 0;
+	cudaEventElapsedTime(&milliseconds, start, stop);
+	cout << milliseconds << endl;
 
-	/* Output */
-	// output(dur);
-
-	// CALL THIS 
-	// cudaDeviceSyncronize();
 }
