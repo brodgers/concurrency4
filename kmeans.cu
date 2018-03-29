@@ -286,11 +286,29 @@ __device__ int nearest(double* d_centroids, double* point, params *p) {
 // }
 
 /* Finds the nearest centroids for all points and populates clusters */
-__global__ void findNearestCentroids(double* d_centroids, double* d_data, int* d_labels, params* d_params) {
+__global__ void findNearestCentroids(double* d_centroids, double* d_data, int* d_labels, params* d_params, int size) {
+	// printf("Find Nearest Centroid\n");
+	extern __shared__ int s[];
+	// printf("after shared\n");
+	// for(int i = 0; i < size; i++) {
+	// 	s[i] = -1;
+	// }
+	// printf("after setting\n");
 	int index = blockIdx.x * blockDim.x + threadIdx.x * d_params->num_features;
 	if(index < d_params->num_points) {
 		d_labels[blockIdx.x * blockDim.x + threadIdx.x] = nearest(d_centroids, &d_data[blockIdx.x * blockDim.x + threadIdx.x * d_params->num_features], d_params);
+			// printf("index: %d", index);
+		// s[threadIdx.x] = nearest(d_centroids, &d_data[blockIdx.x * blockDim.x + threadIdx.x * d_params->num_features], d_params);
 	}
+	// __syncthreads();
+
+	// if(threadIdx.x == 0) {
+	// 	for(int i = 0; i < size; i++) {
+	// 		if(s[i] != -1 && index < d_params->num_points) {
+	// 			d_labels[blockIdx.x * blockDim.x + threadIdx.x] = s[i];
+	// 		}
+	// 	}
+	// }
 }
 
 /* Runs kmeans on dataset */
@@ -298,8 +316,18 @@ __global__ void kmeans(double* d_centroids, double* d_data, int* d_labels, param
 	int iterations = 0;
 	bool done = false;
 
+	int rem = d_params->num_points % 20;
+	int size;
+	if (rem == 0) {
+		size = d_params->num_points;
+	} else {
+		size = d_params->num_points + 20 - rem;
+	}
+	size /= 20;
+
 	while(!done) {
-		findNearestCentroids<<<20, 1024>>>(d_centroids, d_data, d_labels, d_params);
+		// printf("iteration");
+		findNearestCentroids<<<20, 1024, size * sizeof(int)>>>(d_centroids, d_data, d_labels, d_params, size);
 		// aggregate_clusters(local_clusters);
 		cudaDeviceSynchronize();
 
@@ -312,6 +340,8 @@ __global__ void kmeans(double* d_centroids, double* d_data, int* d_labels, param
 
 int main(int argc, char* argv[]) {
 	args(argc, argv);
+
+	auto before = chrono::system_clock::now();
 	input();
 
 	double* sums;
@@ -320,19 +350,26 @@ int main(int argc, char* argv[]) {
 	cudaMalloc((void**)&diff, sizeof(double));
 
 	randomCentroids(data[0].size());
+	auto end = chrono::system_clock::now();
+	auto dur = end - before;
+
+	typedef std::chrono::duration<float> float_seconds;
+	auto secs = std::chrono::duration_cast<float_seconds>(dur);
+	cout << secs.count() << endl;
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 
+	// cout << "before" << endl;
 	cudaEventRecord(start);
 	kmeans<<<1, 1>>>(d_centroids, d_data, d_labels, d_params, sums, diff);
-	// cudaDeviceSynchronize();
+	cudaDeviceSynchronize();
 	cudaEventRecord(stop);
 
 	cudaEventSynchronize(stop);
 	float milliseconds = 0;
 	cudaEventElapsedTime(&milliseconds, start, stop);
 	cout << milliseconds << endl;
-
+	// cout << "time" << endl;
 }
